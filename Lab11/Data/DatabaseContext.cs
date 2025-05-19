@@ -51,6 +51,34 @@ public class DatabaseContext : DbContext
             .HasOne(pm => pm.Medicament)
             .WithMany(m => m.PrescriptionMedicaments)
             .HasForeignKey(pm => pm.IdMedicament);
+        
+        //For tests
+        modelBuilder.Entity<Medicament>().HasData(
+            new Medicament
+            {
+                IdMedicament = 1,   
+                Name = "Apap",
+                Description = "Przeciwbólowy",
+                Type = "Tabletka"
+            },
+            new Medicament
+            {
+                IdMedicament = 2,
+                Name = "Ibuprofen",
+                Description = "Przeciwzapalny",
+                Type = "Tabletka"
+            }
+        );
+
+        modelBuilder.Entity<Doctor>().HasData(
+            new Doctor
+            {
+                IdDoctor = 1, 
+                FirstName = "Anna",
+                LastName = "Nowak",
+                Email = "anna.nowak@example.com"
+            }
+        );
     }
 
     

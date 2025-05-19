@@ -48,6 +48,15 @@ namespace Lab11.Migrations
                     b.HasKey("IdDoctor");
 
                     b.ToTable("Doctor");
+
+                    b.HasData(
+                        new
+                        {
+                            IdDoctor = 1,
+                            Email = "anna.nowak@example.com",
+                            FirstName = "Anna",
+                            LastName = "Nowak"
+                        });
                 });
 
             modelBuilder.Entity("Lab11.Models.Medicament", b =>
@@ -76,6 +85,22 @@ namespace Lab11.Migrations
                     b.HasKey("IdMedicament");
 
                     b.ToTable("Medicament");
+
+                    b.HasData(
+                        new
+                        {
+                            IdMedicament = 1,
+                            Description = "Przeciwbólowy",
+                            Name = "Apap",
+                            Type = "Tabletka"
+                        },
+                        new
+                        {
+                            IdMedicament = 2,
+                            Description = "Przeciwzapalny",
+                            Name = "Ibuprofen",
+                            Type = "Tabletka"
+                        });
                 });
 
             modelBuilder.Entity("Lab11.Models.Patient", b =>

@@ -1,6 +1,5 @@
 ﻿using Lab11.DTOs;
 using Lab11.Exceptions;
-using Lab11.Models;
 using Microsoft.Data.SqlClient;
 
 namespace Lab11.Services;
@@ -30,32 +29,40 @@ public class PrescriptionService(IConfiguration configuration) : IPrescriptionSe
             }
 
             //Client exists
-            cmd.CommandText = "SELECT COUNT(*) FROM Patient WHERE IdPatient = @IdPatient;";
-            cmd.Parameters.AddWithValue("@IdPatient", prescriptionRequestDto.Patient.IdPatient);
-            int count = (int)await cmd.ExecuteScalarAsync();
-            int idPatient = 0;
-            if (count <= 0)
+            int idPatient;
+            cmd.CommandText = @"
+            SELECT IdPatient FROM Patient
+            WHERE FirstName = @FirstName AND LastName = @LastName AND Birthdate = @Birthdate";
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@FirstName", prescriptionRequestDto.Patient.FirstName);
+            cmd.Parameters.AddWithValue("@LastName", prescriptionRequestDto.Patient.LastName);
+            cmd.Parameters.AddWithValue("@Birthdate", prescriptionRequestDto.Patient.Birthdate);
+            var result = await cmd.ExecuteScalarAsync();
+
+            if (result == null)
             {
-                var template = prescriptionRequestDto.Patient;
                 cmd.Parameters.Clear();
-
                 cmd.CommandText = @"
-                        INSERT INTO Patient (FirstName, LastName, Birthdate)
-                        OUTPUT INSERTED.IdPatient
-                        VALUES (@FirstName, @LastName, @Birthdate);";
+                INSERT INTO Patient (FirstName, LastName, Birthdate)
+                OUTPUT INSERTED.IdPatient
+                VALUES (@FirstName, @LastName, @Birthdate)";
 
-                cmd.Parameters.AddWithValue("@FirstName", template.FirstName);
-                cmd.Parameters.AddWithValue("@LastName", template.LastName);
-                cmd.Parameters.AddWithValue("@Birthdate", template.Birthdate);
+                cmd.Parameters.AddWithValue("@FirstName", prescriptionRequestDto.Patient.FirstName);
+                cmd.Parameters.AddWithValue("@LastName", prescriptionRequestDto.Patient.LastName);
+                cmd.Parameters.AddWithValue("@Birthdate", prescriptionRequestDto.Patient.Birthdate);
 
                 idPatient = (int)await cmd.ExecuteScalarAsync();
+            }
+            else
+            {
+                idPatient = (int)result;
             }
 
             //Doctor exist
             cmd.Parameters.Clear();
             cmd.CommandText = "SELECT COUNT(*) FROM Doctor WHERE IdDoctor = @IdDoctor;";
             cmd.Parameters.AddWithValue("@IdDoctor", prescriptionRequestDto.IdDoctor);
-            count = (int)await cmd.ExecuteScalarAsync();
+            int count = (int)await cmd.ExecuteScalarAsync();
             if (count <= 0)
             {
                 throw new NotFoundException("Prescription doctor not found");
