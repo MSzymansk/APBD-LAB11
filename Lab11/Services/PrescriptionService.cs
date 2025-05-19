@@ -1,197 +1,116 @@
-﻿using Lab11.DTOs;
+﻿using Lab11.Data;
+using Lab11.DTOs;
 using Lab11.Exceptions;
-using Microsoft.Data.SqlClient;
+using Lab11.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace Lab11.Services;
 
-public class PrescriptionService(IConfiguration configuration) : IPrescriptionService
+public class PrescriptionService : IPrescriptionService
 {
-    public async Task AddPrescription(PrescriptionRequestDto prescriptionRequestDto)
+    private readonly DatabaseContext _context;
+
+    public PrescriptionService(DatabaseContext context)
     {
-        await using SqlConnection conn = new SqlConnection(configuration.GetConnectionString("Default"));
-        await using SqlCommand cmd = new SqlCommand("", conn);
-        await conn.OpenAsync();
-        var transaction = await conn.BeginTransactionAsync();
-        cmd.Transaction = transaction as SqlTransaction;
+        _context = context;
+    }
 
-        try
+    public async Task AddPrescription(PrescriptionRequestDto dto)
+    {
+        if (dto.DueDate < dto.Date)
+            throw new ConflictException("Prescription due date is less than the date");
+
+        if (dto.Medicaments.Count > 10)
+            throw new ConflictException("Too many medicaments");
+
+        var patient = await _context.Patients
+            .FirstOrDefaultAsync(p =>
+                p.FirstName == dto.Patient.FirstName &&
+                p.LastName == dto.Patient.LastName &&
+                p.Birthdate == dto.Patient.Birthdate);
+
+        if (patient == null)
         {
-            //Date check
-            if (prescriptionRequestDto.DueDate < prescriptionRequestDto.Date)
+            patient = new Patient
             {
-                throw new ConflictException("Prescription due date is less than the date");
-            }
-
-            //Medicaments count
-            if (prescriptionRequestDto.Medicaments.Count > 10)
-            {
-                throw new ConflictException("Too many medicaments");
-            }
-
-            //Client exists
-            int idPatient;
-            cmd.CommandText = @"
-            SELECT IdPatient FROM Patient
-            WHERE FirstName = @FirstName AND LastName = @LastName AND Birthdate = @Birthdate";
-            cmd.Parameters.Clear();
-            cmd.Parameters.AddWithValue("@FirstName", prescriptionRequestDto.Patient.FirstName);
-            cmd.Parameters.AddWithValue("@LastName", prescriptionRequestDto.Patient.LastName);
-            cmd.Parameters.AddWithValue("@Birthdate", prescriptionRequestDto.Patient.Birthdate);
-            var result = await cmd.ExecuteScalarAsync();
-
-            if (result == null)
-            {
-                cmd.Parameters.Clear();
-                cmd.CommandText = @"
-                INSERT INTO Patient (FirstName, LastName, Birthdate)
-                OUTPUT INSERTED.IdPatient
-                VALUES (@FirstName, @LastName, @Birthdate)";
-
-                cmd.Parameters.AddWithValue("@FirstName", prescriptionRequestDto.Patient.FirstName);
-                cmd.Parameters.AddWithValue("@LastName", prescriptionRequestDto.Patient.LastName);
-                cmd.Parameters.AddWithValue("@Birthdate", prescriptionRequestDto.Patient.Birthdate);
-
-                idPatient = (int)await cmd.ExecuteScalarAsync();
-            }
-            else
-            {
-                idPatient = (int)result;
-            }
-
-            //Doctor exist
-            cmd.Parameters.Clear();
-            cmd.CommandText = "SELECT COUNT(*) FROM Doctor WHERE IdDoctor = @IdDoctor;";
-            cmd.Parameters.AddWithValue("@IdDoctor", prescriptionRequestDto.IdDoctor);
-            int count = (int)await cmd.ExecuteScalarAsync();
-            if (count <= 0)
-            {
-                throw new NotFoundException("Prescription doctor not found");
-            }
-
-            //Medicaments exists
-            foreach (var medicament in prescriptionRequestDto.Medicaments)
-            {
-                cmd.Parameters.Clear();
-                cmd.CommandText = "SELECT COUNT(*) FROM Medicament WHERE IdMedicament = @IdMedicament;";
-                cmd.Parameters.AddWithValue("@IdMedicament", medicament.IdMedicament);
-                count = (int)await cmd.ExecuteScalarAsync();
-                if (count <= 0)
-                {
-                    throw new NotFoundException($"Medicament {medicament.IdMedicament} not found");
-                }
-            }
-
-            //Prescription add
-            cmd.Parameters.Clear();
-            cmd.CommandText = @"INSERT INTO Prescription (Date, DueDate, IdPatient, IdDoctor)
-                            OUTPUT INSERTED.IdPrescription
-                            VALUES (@Date, @DueDate, @IdPatient, @IdDoctor);";
-            cmd.Parameters.AddWithValue("@Date", prescriptionRequestDto.Date);
-            cmd.Parameters.AddWithValue("@DueDate", prescriptionRequestDto.DueDate);
-            cmd.Parameters.AddWithValue("@IdPatient", idPatient);
-            cmd.Parameters.AddWithValue("@IdDoctor", prescriptionRequestDto.IdDoctor);
-            int newPrescriptionId = (int)(await cmd.ExecuteScalarAsync());
-
-            //Prescription_medicaments add
-            foreach (var medicament in prescriptionRequestDto.Medicaments)
-            {
-                cmd.Parameters.Clear();
-                cmd.CommandText = @"INSERT INTO Prescription_Medicament (IdMedicament, IdPrescription,Dose,Details)
-                                     VALUES (@IdMedicament, @IdPrescription, @Dose, @Details);";
-                cmd.Parameters.AddWithValue("@IdMedicament", medicament.IdMedicament);
-                cmd.Parameters.AddWithValue("@IdPrescription", newPrescriptionId);
-                cmd.Parameters.AddWithValue("@Dose", medicament.Dose);
-                cmd.Parameters.AddWithValue("@Details", medicament.Details);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
-            await transaction.CommitAsync();
+                FirstName = dto.Patient.FirstName,
+                LastName = dto.Patient.LastName,
+                Birthdate = dto.Patient.Birthdate
+            };
+            _context.Patients.Add(patient);
+            await _context.SaveChangesAsync();
         }
-        catch (Exception e)
+
+        var doctor = await _context.Doctors.FindAsync(dto.IdDoctor);
+        if (doctor == null)
+            throw new NotFoundException("Prescription doctor not found");
+
+        var medicaments = await _context.Medicaments
+            .Where(m => dto.Medicaments.Select(x => x.IdMedicament).Contains(m.IdMedicament))
+            .ToListAsync();
+
+        if (medicaments.Count != dto.Medicaments.Count)
+            throw new NotFoundException("One or more medicaments not found");
+
+        var prescription = new Prescription
         {
-            await transaction.RollbackAsync();
-            throw;
-        }
+            Date = dto.Date,
+            DueDate = dto.DueDate,
+            IdDoctor = dto.IdDoctor,
+            IdPatient = patient.IdPatient,
+            PrescriptionMedicaments = dto.Medicaments.Select(m => new PrescriptionMedicament
+            {
+                IdMedicament = m.IdMedicament,
+                Dose = m.Dose,
+                Details = m.Details
+            }).ToList()
+        };
+
+        _context.Prescriptions.Add(prescription);
+        await _context.SaveChangesAsync();
     }
 
     public async Task<PatientGetDto> GetPatient(int id)
     {
-        var patientDto = new PatientGetDto();
-        var prescriptionsDict = new Dictionary<int, PrescriptionDto>();
+        var patient = await _context.Patients
+            .Where(p => p.IdPatient == id)
+            .Include(p => p.Prescriptions)
+                .ThenInclude(p => p.Doctor)
+            .Include(p => p.Prescriptions)
+                .ThenInclude(p => p.PrescriptionMedicaments)
+                    .ThenInclude(pm => pm.Medicament)
+            .FirstOrDefaultAsync();
 
-        string query = @"
-        SELECT P.FirstName AS PName,
-            P.LastName,
-            P.Birthdate,
-            PS.IdPrescription,
-            PS.Date,
-            PS.DueDate,
-            M.IdMedicament,
-            M.Name,
-            PM.Dose,
-            M.Description,
-            D.IdDoctor,
-            D.FirstName AS DName
-        FROM Patient P
-         INNER JOIN Prescription PS on P.IdPatient = PS.IdPatient
-         INNER JOIN Prescription_Medicament PM on PS.IdPrescription = PM.IdPrescription
-         INNER JOIN Medicament M on PM.IdMedicament = M.IdMedicament
-         INNER JOIN Doctor D on D.IdDoctor = PS.IdDoctor
-        WHERE P.IdPatient = @id;
-        ";
-
-        using (SqlConnection conn = new SqlConnection(configuration.GetConnectionString("Default")))
-        using (SqlCommand cmd = new SqlCommand(query, conn))
-        {
-            cmd.Parameters.AddWithValue("@id", id);
-            await conn.OpenAsync();
-            var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                if (patientDto.IdPatient == 0)
-                {
-                    patientDto.IdPatient = id;
-                    patientDto.FirstName = reader.GetString(reader.GetOrdinal("PName"));
-                    patientDto.LastName = reader.GetString(reader.GetOrdinal("LastName"));
-                    patientDto.Birthdate = reader.GetDateTime(reader.GetOrdinal("Birthdate"));
-                }
-
-                int prescriptionId = reader.GetInt32(reader.GetOrdinal("IdPrescription"));
-                if (!prescriptionsDict.ContainsKey(prescriptionId))
-                {
-                    prescriptionsDict[prescriptionId] = new PrescriptionDto()
-                    {
-                        IdPrescription = prescriptionId,
-                        Date = reader.GetDateTime(reader.GetOrdinal("Date")),
-                        DueDate = reader.GetDateTime(reader.GetOrdinal("DueDate")),
-                        Doctor = new DoctorDto
-                        {
-                            IdDoctor = reader.GetInt32(reader.GetOrdinal("IdDoctor")),
-                            FirstName = reader.GetString(reader.GetOrdinal("DName")),
-                        },
-                        Medicaments = new List<MedicamentGetDto>()
-                    };
-                }
-
-                prescriptionsDict[prescriptionId].Medicaments.Add(new MedicamentGetDto()
-                {
-                    IdMedicament = reader.GetInt32(reader.GetOrdinal("IdMedicament")),
-                    Description = reader.GetString(reader.GetOrdinal("Description")),
-                    Dose = reader.GetInt32(reader.GetOrdinal("Dose")),
-                    Name = reader.GetString(reader.GetOrdinal("Name")),
-                });
-
-                patientDto.Prescriptions = prescriptionsDict.Values
-                    .OrderBy(p => p.DueDate)
-                    .ToList();
-            }
-        }
-
-        if (patientDto is null)
-        {
+        if (patient == null)
             throw new NotFoundException("Patient not found");
-        }
 
-        return patientDto;
+        return new PatientGetDto
+        {
+            IdPatient = patient.IdPatient,
+            FirstName = patient.FirstName,
+            LastName = patient.LastName,
+            Birthdate = patient.Birthdate,
+            Prescriptions = patient.Prescriptions
+                .OrderBy(p => p.DueDate)
+                .Select(p => new PrescriptionDto
+                {
+                    IdPrescription = p.IdPrescription,
+                    Date = p.Date,
+                    DueDate = p.DueDate,
+                    Doctor = new DoctorDto
+                    {
+                        IdDoctor = p.Doctor.IdDoctor,
+                        FirstName = p.Doctor.FirstName
+                    },
+                    Medicaments = p.PrescriptionMedicaments
+                        .Select(pm => new MedicamentGetDto
+                        {
+                            IdMedicament = pm.IdMedicament,
+                            Name = pm.Medicament.Name,
+                            Description = pm.Medicament.Description,
+                            Dose = pm.Dose
+                        }).ToList()
+                }).ToList()
+        };
     }
 }
